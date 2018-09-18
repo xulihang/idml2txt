@@ -1,0 +1,254 @@
+﻿AppType=JavaFX
+Build1=Default,b4j.example
+File1=main.bjl
+FileGroup1=Default Group
+Group=Default Group
+Library1=jcore
+Library2=jfx
+Library3=jxmlsax
+Library4=xmlbuilder
+Library5=archiver
+Module1=Map2Xml
+Module2=Xml2Map
+Module3=coordinate
+NumberOfFiles=1
+NumberOfLibraries=5
+NumberOfModules=3
+Version=6.51
+@EndOfDesignText@
+#Region Project Attributes 
+	#MainFormWidth: 600
+	#MainFormHeight: 600 
+#End Region
+
+Sub Process_Globals
+	Private fx As JFX
+	Private MainForm As Form
+	Private loadFileBtn As Button
+	Private ListView1 As ListView
+	Private TextArea1 As TextArea
+End Sub
+
+Sub AppStart (Form1 As Form, Args() As String)
+	MainForm = Form1
+	MainForm.RootPane.LoadLayout("main") 'Load the layout file.
+	MainForm.Show
+	init
+	Dim designmapString As String
+	designmapString=File.ReadString(File.Combine(File.DirApp,"temp"), "designmap.xml")
+	Dim spreadsPathList As List
+	spreadsPathList=getSpreadsPathList(getXmlMap(designmapString))
+    For Each spreadPath As String In spreadsPathList
+		Dim spreadString As String
+		spreadString=File.ReadString(File.Combine(File.DirApp,"temp"),spreadPath)
+		Dim lbl As Label
+		lbl.Initialize("lbl")
+		lbl.Text=spreadPath
+		lbl.Tag=getXmlMap(spreadString)
+		ListView1.Items.Add(lbl)
+    Next
+End Sub
+
+'Return true to allow the default exceptions handler to handle the uncaught exception.
+Sub Application_Error (Error As Exception, StackTrace As String) As Boolean
+	Return True
+End Sub
+
+Sub init
+	If File.Exists(File.DirApp,"temp")=False Then
+		File.MakeDir(File.DirApp,"temp")
+	End If
+End Sub
+
+Sub loadFileBtn_Click
+	Dim fc As FileChooser
+	fc.Initialize
+	fc.SetExtensionFilter("idml",Array As String("*.idml"))
+	Dim path As String
+	path=fc.ShowOpen(MainForm)
+	If path="" Then
+		Return
+	End If
+	Wait For (File.CopyAsync(path, "", File.Combine(File.DirApp,"temp"), "input.idml")) Complete (Success As Boolean)
+	Log("Success: " & Success)
+	Dim archiver As Archiver
+	archiver.AsyncUnZip(File.Combine(File.DirApp,"temp"),"input.idml",File.Combine(File.DirApp,"temp"),"archiver")
+	wait for archiver_UnZipDone(CompletedWithoutError As Boolean, NbOfFiles As Int)
+	Log(CompletedWithoutError)
+End Sub
+
+Sub getXmlMap(xmlstring As String) As Map
+	Dim ParsedData As Map
+	Dim xm As Xml2Map
+	xm.Initialize
+	ParsedData = xm.Parse(xmlstring)
+	Return ParsedData
+End Sub
+
+Sub getSpreadsPathList(ParsedData As Map) As List
+	Dim Document As Map = ParsedData.Get("Document")
+	Dim SpreadsList As List
+	SpreadsList=GetElements(Document,"idPkg:Spread")
+	Dim pathList As List
+	pathList.Initialize
+	For Each spread As Map In SpreadsList
+		Dim Attributes As Map
+		Attributes=spread.Get("Attributes")
+		pathList.Add(Attributes.Get("src"))
+	Next
+	Return pathList
+End Sub
+
+Sub getStoryContent(ParsedData As Map) As String
+	Dim root As Map = ParsedData.Get("idPkg:Story")
+	Dim story As Map = root.Get("Story")
+	Dim content As String
+	Dim ParagraphStyleRanges As List
+	ParagraphStyleRanges=GetElements(story,"ParagraphStyleRange")
+	For Each ParagraphStyleRange As Map In ParagraphStyleRanges
+		Dim CharacterStyleRanges As List
+		CharacterStyleRanges=GetElements(ParagraphStyleRange,"CharacterStyleRange")
+		For Each CharacterStyleRange As Map In CharacterStyleRanges
+			If CharacterStyleRange.Get("Content")=Null Then
+				Continue
+			End If
+			content=content&CharacterStyleRange.Get("Content")
+		Next
+	Next
+	Return content
+End Sub
+
+Sub ListView1_MouseClicked (EventData As MouseEvent)
+	If ListView1.SelectedItem=Null Then
+		Return
+	End If
+	Dim lbl As Label
+	lbl=ListView1.SelectedItem
+	Log(lbl.Text)
+	Dim spreadMap As Map
+	spreadMap=lbl.Tag
+	Dim root As Map
+	root=spreadMap.Get("idPkg:Spread")
+	Dim Spread As Map
+	Spread=root.Get("Spread")
+	Dim TextFramesList As List
+	TextFramesList=GetElements(Spread,"TextFrame")
+	
+	'add textframes in groups
+	Dim groupsList As List
+	groupsList.Initialize
+	groupsList.AddAll(GetElements(Spread,"Group"))
+	For Each group As Map In groupsList
+		TextFramesList.AddAll(GetElements(group,"TextFrame"))
+	Next
+	
+	'sort the TextFrames according to the order of left-upper to right-lower
+	TextFramesList=sortTextFrameList(TextFramesList)
+	
+	'remove duplicate stories as some TextFrames are linked
+	Dim storyIDList As List
+	storyIDList.Initialize
+	Dim newList As List
+	newList.Initialize
+	For Each TextFrame As Map In TextFramesList
+		Dim attributes As Map
+		attributes=TextFrame.Get("Attributes")
+		Dim storyID As String
+		storyID=attributes.Get("ParentStory")
+		Log(storyID)
+		If storyIDList.IndexOf(storyID)=-1 Then
+			newList.Add(TextFrame)
+			storyIDList.Add(storyID)
+		End If
+	Next
+	
+	Dim SpreadContent As String
+	For Each TextFrame As Map In newList
+		Dim attributes As Map
+		attributes=TextFrame.Get("Attributes")
+		Dim storyID As String
+		storyID=attributes.Get("ParentStory")
+		Log(storyID)
+		Dim storyString As String
+		storyString=File.ReadString(File.Combine(File.DirApp,"temp"),"Stories/Story_"&storyID&".xml")
+		Log(getStoryContent(getXmlMap(storyString)))
+		SpreadContent=SpreadContent&CRLF&getStoryContent(getXmlMap(storyString))
+	Next
+	TextArea1.Text=SpreadContent
+End Sub
+
+Sub sortTextFrameList(TextFramesList As List) As List
+	Dim LeftXYAsKey As Map
+	LeftXYAsKey.Initialize
+	Dim RightXYAsKey As Map
+	RightXYAsKey.Initialize
+    Dim LeftXY,RightXY As List
+	LeftXY.Initialize
+	RightXY.Initialize
+	For Each TextFrame As Map In TextFramesList
+	    Dim attributes As Map
+		attributes=TextFrame.Get("Attributes")
+		Dim XY As coordinate
+		XY.Initialize(attributes.Get("ItemTransform"))
+		If XY.X<=0 Then
+			LeftXYAsKey.Put(XY,TextFrame)
+			LeftXY.Add(XY)
+		Else
+			RightXYAsKey.Put(XY,TextFrame)
+			RightXY.Add(XY)
+		End If
+	Next
+	Dim resultList As List
+    resultList.Initialize
+	For Each XY As coordinate In BubbleSort(LeftXY)
+		resultList.Add(LeftXYAsKey.Get(XY))
+	Next
+	For Each XY As coordinate In BubbleSort(RightXY)
+		resultList.Add(RightXYAsKey.Get(XY))
+	Next
+	Return resultList
+End Sub
+
+Sub GetElements (m As Map, key As String) As List
+	Dim res As List
+	If m.ContainsKey(key) = False Then
+		res.Initialize
+		Return res
+	Else
+		Dim value As Object = m.Get(key)
+		If value Is List Then Return value
+		res.Initialize
+		res.Add(value)
+		Return res
+	End If
+End Sub
+
+Sub BubbleSort(XYList As List) As List
+
+    For j=0 To XYList.Size-1
+		For i = 1 To XYList.Size - 1
+			If  NextIsLower(XYList.Get(i),XYList.Get(i-1)) Then
+				XYList=Swap(XYList,i, i-1)
+
+			End If
+		Next
+	Next
+	Return XYList
+End Sub
+
+Sub Swap(XYList As List,index1 As Int, index2 As Int) As List
+	Dim temp As coordinate
+	temp = XYList.Get(index1)
+	XYList.Set(index1,XYList.Get(index2))
+	XYList.Set(index2,temp)
+	Return XYList
+End Sub
+
+Sub NextIsLower(XY1 As coordinate,XY2 As coordinate) As Boolean
+	'XY1 is the next
+	If XY1.Y<=XY2.Y Then
+		Return True
+	Else
+		Return False
+	End If
+End Sub
