@@ -27,6 +27,7 @@ Sub Process_Globals
 	Private loadFileBtn As Button
 	Private ListView1 As ListView
 	Private TextArea1 As TextArea
+	Private exportBtn As Button
 End Sub
 
 Sub AppStart (Form1 As Form, Args() As String)
@@ -34,19 +35,6 @@ Sub AppStart (Form1 As Form, Args() As String)
 	MainForm.RootPane.LoadLayout("main") 'Load the layout file.
 	MainForm.Show
 	init
-	Dim designmapString As String
-	designmapString=File.ReadString(File.Combine(File.DirApp,"temp"), "designmap.xml")
-	Dim spreadsPathList As List
-	spreadsPathList=getSpreadsPathList(getXmlMap(designmapString))
-    For Each spreadPath As String In spreadsPathList
-		Dim spreadString As String
-		spreadString=File.ReadString(File.Combine(File.DirApp,"temp"),spreadPath)
-		Dim lbl As Label
-		lbl.Initialize("lbl")
-		lbl.Text=spreadPath
-		lbl.Tag=getXmlMap(spreadString)
-		ListView1.Items.Add(lbl)
-    Next
 End Sub
 
 'Return true to allow the default exceptions handler to handle the uncaught exception.
@@ -58,6 +46,22 @@ Sub init
 	If File.Exists(File.DirApp,"temp")=False Then
 		File.MakeDir(File.DirApp,"temp")
 	End If
+End Sub
+
+Sub loadIDML
+	Dim designmapString As String
+	designmapString=File.ReadString(File.Combine(File.DirApp,"temp"), "designmap.xml")
+	Dim spreadsPathList As List
+	spreadsPathList=getSpreadsPathList(getXmlMap(designmapString))
+	For Each spreadPath As String In spreadsPathList
+		Dim spreadString As String
+		spreadString=File.ReadString(File.Combine(File.DirApp,"temp"),spreadPath)
+		Dim lbl As Label
+		lbl.Initialize("lbl")
+		lbl.Text=spreadPath
+		lbl.Tag=getXmlMap(spreadString)
+		ListView1.Items.Add(lbl)
+	Next
 End Sub
 
 Sub loadFileBtn_Click
@@ -75,6 +79,7 @@ Sub loadFileBtn_Click
 	archiver.AsyncUnZip(File.Combine(File.DirApp,"temp"),"input.idml",File.Combine(File.DirApp,"temp"),"archiver")
 	wait for archiver_UnZipDone(CompletedWithoutError As Boolean, NbOfFiles As Int)
 	Log(CompletedWithoutError)
+	loadIDML
 End Sub
 
 Sub getXmlMap(xmlstring As String) As Map
@@ -109,11 +114,22 @@ Sub getStoryContent(ParsedData As Map) As String
 		Dim CharacterStyleRanges As List
 		CharacterStyleRanges=GetElements(ParagraphStyleRange,"CharacterStyleRange")
 		For Each CharacterStyleRange As Map In CharacterStyleRanges
-			If CharacterStyleRange.Get("Content")=Null Then
-				Continue
-			End If
-			content=content&CharacterStyleRange.Get("Content")
+			For Each key As String In CharacterStyleRange.Keys
+				Log(key)
+				If key="Br" Then
+					content=content&CRLF
+				End If
+				If key="Content" Then
+					If CharacterStyleRange.Get("Content")=Null Then
+						Continue
+					End If
+					content=content&CharacterStyleRange.Get("Content")
+				End If
+			Next
+
+			
 		Next
+		content=content&CRLF
 	Next
 	Return content
 End Sub
@@ -172,9 +188,9 @@ Sub ListView1_MouseClicked (EventData As MouseEvent)
 		Dim storyString As String
 		storyString=File.ReadString(File.Combine(File.DirApp,"temp"),"Stories/Story_"&storyID&".xml")
 		Log(getStoryContent(getXmlMap(storyString)))
-		SpreadContent=SpreadContent&CRLF&getStoryContent(getXmlMap(storyString))
+		SpreadContent=SpreadContent&getStoryContent(getXmlMap(storyString))&CRLF
 	Next
-	TextArea1.Text=SpreadContent
+	TextArea1.Text=stripContent(SpreadContent)
 End Sub
 
 Sub sortTextFrameList(TextFramesList As List) As List
@@ -251,4 +267,100 @@ Sub NextIsLower(XY1 As coordinate,XY2 As coordinate) As Boolean
 	Else
 		Return False
 	End If
+End Sub
+
+Sub stripContent(content As String) As String
+	content=Regex.Replace(" +", content," ")
+	content=content.Replace(" ","")
+	content=content.Replace("  "," ")
+	content=Regex.Replace("\n\n+",content,CRLF&CRLF)
+	Return content
+End Sub
+
+Sub exportBtn_MouseClicked (EventData As MouseEvent)
+	Dim page As Int
+	page=0
+	Dim result As String
+	For Each item As Label In ListView1.Items
+		Dim spreadContent As List
+		spreadContent=getSpreadContent(TextFramesListOfEachSpread(item.Tag))
+		If spreadContent.Get(0)<>"" Then
+			page=page+1
+			result=result&"Page "&page&CRLF
+			result=result&spreadContent.Get(0)&CRLF
+		End If
+		If spreadContent.Get(1)<>"" Then
+		    page=page+1
+		    result=result&"Page "&page&CRLF
+		    result=result&spreadContent.Get(1)&CRLF
+		End If
+	Next
+	File.WriteString(File.DirApp,"out.txt",result)
+End Sub
+
+Sub TextFramesListOfEachSpread(spreadMap As Map) As List
+	Dim root As Map
+	root=spreadMap.Get("idPkg:Spread")
+	Dim Spread As Map
+	Spread=root.Get("Spread")
+	Dim TextFramesList As List
+	TextFramesList=GetElements(Spread,"TextFrame")
+	
+	'add textframes in groups
+	Dim groupsList As List
+	groupsList.Initialize
+	groupsList.AddAll(GetElements(Spread,"Group"))
+	For Each group As Map In groupsList
+		TextFramesList.AddAll(GetElements(group,"TextFrame"))
+	Next
+	
+	'sort the TextFrames according to the order of left-upper to right-lower
+	TextFramesList=sortTextFrameList(TextFramesList)
+	
+	'remove duplicate stories as some TextFrames are linked
+	Dim storyIDList As List
+	storyIDList.Initialize
+	Dim newList As List
+	newList.Initialize
+	For Each TextFrame As Map In TextFramesList
+		Dim attributes As Map
+		attributes=TextFrame.Get("Attributes")
+		Dim storyID As String
+		storyID=attributes.Get("ParentStory")
+		Log(storyID)
+		If storyIDList.IndexOf(storyID)=-1 Then
+			newList.Add(TextFrame)
+			storyIDList.Add(storyID)
+		End If
+	Next
+	Return newList
+
+End Sub
+
+Sub getSpreadContent(TextFramesList As List) As List
+	Dim leftPage,rightPage As String
+	Dim spreadContent As List
+	spreadContent.Initialize
+	For Each TextFrame As Map In TextFramesList
+
+		Dim attributes As Map
+		attributes=TextFrame.Get("Attributes")
+		Dim storyID As String
+		storyID=attributes.Get("ParentStory")
+		Dim XY As coordinate
+		XY.Initialize(attributes.Get("ItemTransform"))
+		Log(storyID)
+		Dim storyString As String
+		storyString=File.ReadString(File.Combine(File.DirApp,"temp"),"Stories/Story_"&storyID&".xml")
+        If XY.x<=0 Then
+			leftPage=leftPage&getStoryContent(getXmlMap(storyString))&CRLF
+		Else
+			rightPage=rightPage&getStoryContent(getXmlMap(storyString))&CRLF
+        End If
+	Next
+	leftPage=stripContent(leftPage)
+	rightPage=stripContent(rightPage)
+	spreadContent.Add(leftPage)
+	spreadContent.Add(rightPage)
+	Return spreadContent
 End Sub
