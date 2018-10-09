@@ -28,6 +28,8 @@ Sub Process_Globals
 	Private ListView1 As ListView
 	Private TextArea1 As TextArea
 	Private exportBtn As Button
+	Private parser As SaxParser
+	Private order As List
 End Sub
 
 Sub AppStart (Form1 As Form, Args() As String)
@@ -46,6 +48,8 @@ Sub init
 	If File.Exists(File.DirApp,"temp")=False Then
 		File.MakeDir(File.DirApp,"temp")
 	End If
+	parser.Initialize
+	order.Initialize
 End Sub
 
 Sub loadIDML
@@ -105,25 +109,63 @@ Sub getSpreadsPathList(ParsedData As Map) As List
 End Sub
 
 Sub getStoryContent(ParsedData As Map) As String
+	
+	Log(ParsedData)
 	Dim root As Map = ParsedData.Get("idPkg:Story")
 	Dim story As Map = root.Get("Story")
 	Dim content As String
 	Dim ParagraphStyleRanges As List
 	ParagraphStyleRanges=GetElements(story,"ParagraphStyleRange")
 	For Each ParagraphStyleRange As Map In ParagraphStyleRanges
+
 		Dim CharacterStyleRanges As List
 		CharacterStyleRanges=GetElements(ParagraphStyleRange,"CharacterStyleRange")
+		
 		For Each CharacterStyleRange As Map In CharacterStyleRanges
+			Log(CharacterStyleRange)
+			Dim brcontentInOrder As List
+			brcontentInOrder.Initialize
+			Log(CharacterStyleRange)
+			Dim size As Int
+			size=GetElements(CharacterStyleRange,"Br").Size+GetElements(CharacterStyleRange,"Content").Size
+			Log(size)
+			Log(order)
+			For i=0 To Max(0,size-1)
+				If order.Size=0 Then
+					Exit
+				End If
+				If order.Get(i)="Br" Then
+					brcontentInOrder.Add(CRLF)
+				Else
+					brcontentInOrder.Add("Content")
+				End If
+			Next
+			For i=0 To size-1
+				order.RemoveAt(0)
+			Next
 			For Each key As String In CharacterStyleRange.Keys
 				Log(key)
-				If key="Br" Then
-					content=content&CRLF
-				End If
+
+				
 				If key="Content" Then
-					If CharacterStyleRange.Get("Content")=Null Then
-						Continue
-					End If
-					content=content&CharacterStyleRange.Get("Content")
+					Dim contentList As List
+					contentList=GetElements(CharacterStyleRange,"Content")
+					Dim j As Int=0
+					Do While j<contentList.Size
+						For k=0 To brcontentInOrder.Size-1
+							If brcontentInOrder.Get(k)="Content" Then
+								Log(contentList)
+								brcontentInOrder.Set(k,contentList.Get(j))
+								j=j+1
+								Continue
+							End If
+						Next
+					Loop
+					For Each item As String In brcontentInOrder
+						content=content&item
+					Next
+
+					
 				End If
 			Next
 
@@ -134,6 +176,19 @@ Sub getStoryContent(ParsedData As Map) As String
 	Return content
 End Sub
 
+
+Sub getBrContentOrder(path As String)
+	order.Clear
+	parser.Parse(File.OpenInput(path,""),"Parser")
+	Log(order)
+End Sub
+
+
+Sub Parser_EndElement (Uri As String, Name As String, Text As StringBuilder)
+	If Name="Br" Or Name="Content" Then
+		order.Add(Name)
+	End If
+End Sub
 Sub ListView1_MouseClicked (EventData As MouseEvent)
 	If ListView1.SelectedItem=Null Then
 		Return
@@ -187,7 +242,8 @@ Sub ListView1_MouseClicked (EventData As MouseEvent)
 		Log(storyID)
 		Dim storyString As String
 		storyString=File.ReadString(File.Combine(File.DirApp,"temp"),"Stories/Story_"&storyID&".xml")
-		Log(getStoryContent(getXmlMap(storyString)))
+		getBrContentOrder(File.Combine(File.Combine(File.DirApp,"temp"),"Stories/Story_"&storyID&".xml"))
+		'Log(getStoryContent(getXmlMap(storyString)))
 		SpreadContent=SpreadContent&getStoryContent(getXmlMap(storyString))&CRLF
 	Next
 	TextArea1.Text=stripContent(SpreadContent)
@@ -352,7 +408,8 @@ Sub getSpreadContent(TextFramesList As List) As List
 		Log(storyID)
 		Dim storyString As String
 		storyString=File.ReadString(File.Combine(File.DirApp,"temp"),"Stories/Story_"&storyID&".xml")
-        If XY.x<=0 Then
+		getBrContentOrder(File.Combine(File.Combine(File.DirApp,"temp"),"Stories/Story_"&storyID&".xml"))
+		If XY.x<=0 Then
 			leftPage=leftPage&getStoryContent(getXmlMap(storyString))&CRLF
 		Else
 			rightPage=rightPage&getStoryContent(getXmlMap(storyString))&CRLF
